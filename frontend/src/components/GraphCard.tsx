@@ -6,25 +6,36 @@ import {
   Check,
   CircleHelp,
   FileSearch,
+  Layers3,
   Quote,
 } from 'lucide-react'
 
 import type { GraphNodeData } from '../types'
-
-interface NodeMetrics {
-  incoming: number
-  outgoing: number
-  evidence: number
-  hypotheses: number
-  contradictions: number
-}
+import type { NodeMetrics } from './graphProjection'
 
 export function GraphCard({ data, selected }: NodeProps) {
   const node = data.node as GraphNodeData
   const metrics = data.metrics as NodeMetrics
   const motionOrder = Number(data.motionOrder ?? 0)
+  const onExpandEvidence = data.onExpandEvidence as (() => void) | undefined
   const address = typeof node.properties.address === 'string' ? node.properties.address : null
+  const size = typeof node.properties.size === 'number' || typeof node.properties.size === 'string'
+    ? `${node.properties.size} bytes`
+    : null
   const classes = `graph-card kind-${node.kind.toLowerCase()} node-motion-${motionOrder} ${selected ? 'is-selected' : ''}`
+
+  if (data.isCluster) {
+    const onToggleCluster = data.onToggleCluster as (() => void) | undefined
+    return (
+      <div className={`${classes} cluster-card`} style={{ '--motion-order': motionOrder } as CSSProperties}>
+        <Handle type="target" position={Position.Left} />
+        <Layers3 size={15} />
+        <div><span>COLLAPSED CONTEXT</span><strong>{node.label}</strong></div>
+        <button onClick={(event) => { event.stopPropagation(); onToggleCluster?.() }}>Expand</button>
+        <Handle type="source" position={Position.Right} />
+      </div>
+    )
+  }
 
   if (node.kind === 'Function') {
     return (
@@ -36,28 +47,25 @@ export function GraphCard({ data, selected }: NodeProps) {
         </div>
         <div className="function-address">
           <code>{address ?? 'address unknown'}</code>
-          <span>{String(node.properties.size ?? '312 bytes')}</span>
+          {size ? <span>{size}</span> : null}
         </div>
         <div className="function-metrics">
           <span>{metrics.incoming} callers</span>
           <span>{metrics.outgoing} callees</span>
-          <span>{metrics.evidence} evidence</span>
-          <span>{metrics.hypotheses} hypotheses</span>
         </div>
+        <EvidenceBadges metrics={metrics} onExpand={onExpandEvidence} />
         <Handle type="source" position={Position.Right} />
       </div>
     )
   }
 
   if (node.kind === 'Hypothesis') {
-    const support = Number(node.properties.supporting_evidence ?? metrics.evidence ?? 0)
-    const conflicts = Number(node.properties.contradictions ?? metrics.contradictions ?? 0)
     return (
       <div className={classes} style={{ '--motion-order': motionOrder } as CSSProperties}>
         <Handle type="target" position={Position.Left} />
         <div className="hypothesis-title"><CircleHelp size={14} /><strong>{node.label}</strong></div>
         <div className="confidence-row"><span>confidence</span><b>{Math.round(node.confidence * 100)}%</b></div>
-        <div className="hypothesis-evidence"><span>+{support} evidence</span><span>-{conflicts} conflict</span></div>
+        <EvidenceBadges metrics={metrics} onExpand={onExpandEvidence} />
         <Handle type="source" position={Position.Right} />
       </div>
     )
@@ -96,7 +104,26 @@ export function GraphCard({ data, selected }: NodeProps) {
       <Handle type="target" position={Position.Left} />
       {node.kind === 'String' ? <Quote size={13} /> : isVerified ? <Check size={13} /> : <FileSearch size={13} />}
       <div><span>{node.kind}</span><strong>{node.label}</strong></div>
+      <EvidenceBadges metrics={metrics} onExpand={onExpandEvidence} />
       <Handle type="source" position={Position.Right} />
+    </div>
+  )
+}
+
+function EvidenceBadges({ metrics, onExpand }: { metrics: NodeMetrics; onExpand?: () => void }) {
+  if (!metrics.evidence && !metrics.contradictions) return null
+  return (
+    <div className="graph-evidence-badges">
+      {metrics.evidence ? (
+        <button className="evidence-count" onClick={(event) => { event.stopPropagation(); onExpand?.() }}>
+          +{metrics.evidence} evidence
+        </button>
+      ) : null}
+      {metrics.contradictions ? (
+        <button className="conflict-count" onClick={(event) => { event.stopPropagation(); onExpand?.() }}>
+          −{metrics.contradictions} conflict
+        </button>
+      ) : null}
     </div>
   )
 }
