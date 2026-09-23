@@ -36,6 +36,21 @@ Event Log             Result Ingest          `-- PiDriver (JSON stdio)
 - A claim is recoverable after its lease expires.
 - PostgreSQL claims use `FOR UPDATE SKIP LOCKED` through SQLAlchemy.
 
+## Graph presentation contract
+
+The stored graph is canonical analysis state; the main canvas is a bounded cognitive
+projection. Summary mode shows functions with the strongest relationships, confirmed
+facts, active intents, and hypotheses. Evidence and observations stay stored as graph
+entities but appear on demand through support/conflict counts. Low-ranked functions
+collapse into an expandable cluster. Analysis mode expands selected relationships in a
+bounded local neighborhood; raw properties and event history stay in the Inspector and
+Timeline.
+
+For address-bearing program entities, the graph service canonicalizes keys by entity
+kind, binary (or project when no binary is attached), and normalized address. Other
+semantic entities keep the driver's `entity_key`, which remains responsible for
+providing a stable identity across worker runs.
+
 ## Current MVP seam
 
 The demo deliberately uses `MockDriver`. Configure `CAIRN_PI_COMMAND` and create a
@@ -47,4 +62,3 @@ engine.
 Real Ghidra execution is intentionally not faked. A concrete provider should implement
 `ReverseToolProvider` only after an authorized local sample and a working Ghidra bridge
 are available.
-

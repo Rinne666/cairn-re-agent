@@ -237,9 +237,6 @@ code, kbd { font-family: var(--mono); }
 .hypothesis-title strong { font-size: 11px; font-weight: 550; line-height: 1.35; }
 .confidence-row { display: flex; justify-content: space-between; margin-top: 12px; color: var(--secondary); font-size: 9px; }
 .confidence-row b { color: var(--amber); font: 10px var(--mono); font-weight: 500; }
-.hypothesis-evidence { display: flex; gap: 12px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #312d27; font: 8px var(--mono); }
-.hypothesis-evidence span:first-child { color: var(--green); }
-.hypothesis-evidence span:last-child { color: var(--red); }
 .graph-card.kind-intent {
   width: 216px;
   display: grid;
@@ -313,21 +310,12 @@ code, kbd { font-family: var(--mono); }
 .evidence-balance span { display: flex; align-items: center; gap: 5px; font: 8px var(--mono); }
 .evidence-balance .support { color: var(--green); }
 .evidence-balance .conflict { color: var(--red); }
-.question-list { margin: 0; padding-left: 18px; color: #89919b; font-size: 10px; line-height: 1.7; }
 .property-list { margin: 0; }
 .property-list div { display: grid; grid-template-columns: 104px 1fr; gap: 8px; padding: 6px 0; }
 .property-list dt { color: #68717b; font-size: 9px; text-transform: capitalize; }
 .property-list dd { margin: 0; overflow-wrap: anywhere; color: #a7aeb7; font: 9px var(--mono); }
 .provenance p { margin: 0 0 4px; color: #a5adb5; font-size: 10px; }
 .provenance code { color: #646d77; font-size: 8px; }
-.editor-panel { height: calc(100% - 99px); display: grid; grid-template-rows: 32px 1fr; }
-.editor-meta { display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid var(--border); color: #8c949e; font-size: 9px; }
-.editor-meta span { display: flex; align-items: center; gap: 5px; }
-.editor-meta code { color: #59626d; font-size: 8px; }
-.code-loading { display: grid; place-items: center; color: var(--tertiary); font: 9px var(--mono); }
-.tab-empty { height: calc(100% - 99px); display: grid; align-content: center; justify-items: center; gap: 7px; color: #505964; text-align: center; }
-.tab-empty strong { color: #969ea8; font-size: 11px; font-weight: 550; }
-.tab-empty span { font-size: 9px; }
 .feed-intro { display: grid; place-items: center; gap: 9px; padding: 24px 30px; border-bottom: 1px solid var(--border); color: #59626d; text-align: center; }
 .feed-intro p { margin: 0; color: #7d8691; font-size: 10px; line-height: 1.5; }
 .event-feed h3 { padding: 12px 13px 3px; }
@@ -446,10 +434,7 @@ body { color: var(--text); background: var(--bg); }
 .graph-card.kind-hypothesis { border-color: #d1b878; background: #fffdf8; }
 .hypothesis-title svg, .confidence-row b { color: var(--amber); }
 .hypothesis-title strong { color: #5b4e35; }
-.confidence-row, .hypothesis-evidence { color: #819188; }
-.hypothesis-evidence { border-top-color: #efe5cd; }
-.hypothesis-evidence span:first-child { color: #6c9c7c; }
-.hypothesis-evidence span:last-child { color: var(--red); }
+.confidence-row { color: #819188; }
 .graph-card.kind-intent { border-color: #b6d0c0; color: #5f9476; background: #f9fdfb; }
 .graph-card.kind-intent strong { color: #436b56; }
 .graph-card.kind-intent span { color: #7e9d8a; }
@@ -487,11 +472,9 @@ body { color: var(--text); background: var(--bg); }
 .hypothesis-summary p { color: #567064; }
 .evidence-balance .support { color: #5e9875; }
 .evidence-balance .conflict { color: var(--red); }
-.question-list, .provenance p { color: #71877d; }
-.property-list dd, .provenance code, .editor-meta code { color: #6f8b7d; }
-.editor-meta, .code-loading { color: #789087; }
-.tab-empty, .feed-intro { color: #8a9c93; }
-.tab-empty strong { color: #557064; }
+.provenance p { color: #71877d; }
+.property-list dd, .provenance code { color: #6f8b7d; }
+.feed-intro { color: #8a9c93; }
 .feed-intro p { color: #7a9084; }
 .event-row strong { color: #557064; }
 .event-row small { color: #8aa096; }
@@ -546,4 +529,92 @@ body { color: var(--text); background: var(--bg); }
   .inspector { min-height: 420px; border-top: 1px solid var(--border); border-left: 0; }
   .activity-panel { height: auto; min-height: 33px; }
   .welcome-card { width: min(520px, calc(100vw - 32px)); padding: 28px; }
+}
+
+/* Cognitive graph controls and compressed semantic nodes */
+.graph-toolbar {
+  height: 76px;
+  min-height: 76px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 2px 10px;
+  padding: 5px 12px;
+}
+.graph-title { flex: 1 1 auto; }
+.graph-title strong { text-transform: none; }
+.graph-mode-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #dce9e1;
+  border-radius: 9px;
+  background: #f5faf7;
+}
+.graph-mode-switch button {
+  height: 23px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  color: #81958b;
+  background: transparent;
+  font-size: 9px;
+  cursor: pointer;
+}
+.graph-mode-switch button.active { color: #315e4b; background: #fff; box-shadow: 0 1px 4px rgba(74,111,92,.12); }
+.context-actions { width: 100%; overflow-x: auto; scrollbar-width: none; }
+.context-actions button.active { color: #356a56; border-color: #b9d5c4; background: #eaf5ef; }
+.context-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.graph-stage .react-flow { padding-top: 76px; }
+.empty-graph { inset-block-start: 76px; }
+.graph-evidence-badges { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 10px 9px; }
+.graph-evidence-badges button {
+  min-height: 20px;
+  padding: 2px 7px;
+  border: 1px solid #cfe2d6;
+  border-radius: 999px;
+  color: #4f8065;
+  background: #f1f8f4;
+  font: 8px var(--mono);
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease;
+}
+.graph-evidence-badges button:hover { background: #e5f2ea; transform: translateY(-1px); }
+.graph-evidence-badges button.conflict-count { border-color: #ead1cd; color: #a3645d; background: #fff6f4; }
+.graph-evidence-badges button.conflict-count:hover { background: #fcebe8; }
+.graph-card.kind-function-cluster {
+  width: 238px;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-style: dashed;
+  border-color: #d3c18f;
+  color: #987c3d;
+  background: #fffdf7;
+}
+.cluster-card > div span { display: block; margin-bottom: 4px; color: #9b895c; font: 7px var(--mono); letter-spacing: .07em; }
+.cluster-card > div strong { color: #5b5849; font-size: 10px; font-weight: 550; }
+.cluster-card > button { padding: 4px 7px; border: 1px solid #e4d6b5; border-radius: 7px; color: #806c3c; background: #fff; font-size: 8px; cursor: pointer; }
+.inspector-list, .inspector-raw { height: calc(100% - 99px); overflow-y: auto; }
+.inspector-entity-row { width: 100%; display: grid; gap: 5px; padding: 11px 13px; border: 0; border-bottom: 1px solid var(--border-subtle); background: transparent; text-align: left; cursor: pointer; }
+.inspector-entity-row:hover { background: #f1f8f4; }
+.inspector-entity-row strong { overflow: hidden; color: #476558; font-size: 10px; font-weight: 550; text-overflow: ellipsis; }
+.inspector-entity-row small { color: #82968b; font: 8px var(--mono); }
+.entity-kind { color: #779184; font: 8px var(--mono); text-transform: uppercase; }
+.entity-kind.kind-evidence, .entity-kind.kind-observation { color: #5e8baa; }
+.inspector-empty { min-height: 130px; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 18px; color: #91a39a; font-size: 9px; text-align: center; }
+.inspector-raw { padding: 11px; box-sizing: border-box; }
+.raw-identity { display: grid; gap: 5px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.raw-identity span { color: #83958c; font-size: 8px; text-transform: uppercase; }
+.raw-identity code { overflow-wrap: anywhere; color: #5e7e6d; font: 8px var(--mono); }
+.inspector-raw pre { margin: 10px 0 0; overflow: auto; color: #597567; font: 9px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-width: 1280px) {
+  .graph-toolbar { gap: 2px 6px; padding-inline: 8px; }
+  .graph-title span { font-size: 8px; }
+  .context-actions { gap: 1px; }
+  .context-actions button { flex: 0 0 auto; padding-inline: 5px; }
+  .context-actions button:nth-child(3), .context-actions button:nth-child(5) { display: inline-flex; }
 }

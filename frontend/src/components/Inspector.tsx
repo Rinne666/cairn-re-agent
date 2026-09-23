@@ -1,11 +1,10 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Braces,
   CheckCircle2,
   CircleHelp,
   Clock3,
   Database,
-  FileCode2,
   GitCommitHorizontal,
   ListTree,
   ShieldAlert,
@@ -13,10 +12,8 @@ import {
 
 import { useCairnStore } from '../store'
 
-const CodePanel = lazy(() => import('./CodePanel'))
-
-const functionTabs = ['Overview', 'Decompiler', 'Assembly', 'Callers', 'Callees', 'Xrefs', 'Evidence', 'Hypotheses', 'Artifacts']
-const hypothesisTabs = ['Overview', 'Evidence', 'Functions', 'Intents']
+const tabs = ['Overview', 'Evidence', 'Relations', 'Raw']
+const evidenceKinds = new Set(['Evidence', 'Observation', 'Trace'])
 
 export function Inspector() {
   const [activeTab, setActiveTab] = useState('Overview')
@@ -24,21 +21,31 @@ export function Inspector() {
   const edges = useCairnStore((state) => state.edges)
   const selectedNodeId = useCairnStore((state) => state.selectedNodeId)
   const events = useCairnStore((state) => state.events)
+  const selectNode = useCairnStore((state) => state.selectNode)
   const node = nodes.find((item) => item.id === selectedNodeId) ?? null
   const isHypothesis = node?.kind === 'Hypothesis'
-  const tabs = node?.kind === 'Function' ? functionTabs : isHypothesis ? hypothesisTabs : ['Overview', 'Evidence', 'Artifacts']
 
   useEffect(() => setActiveTab('Overview'), [selectedNodeId])
 
+  const connectedEdges = useMemo(
+    () => node ? edges.filter((edge) => edge.source_node_id === node.id || edge.target_node_id === node.id) : [],
+    [edges, node],
+  )
+  const connectedNodes = useMemo(() => connectedEdges.flatMap((edge) => {
+    const relatedId = edge.source_node_id === node?.id ? edge.target_node_id : edge.source_node_id
+    const related = nodes.find((item) => item.id === relatedId)
+    return related ? [{ edge, node: related }] : []
+  }), [connectedEdges, node, nodes])
+  const evidenceNodes = connectedNodes.filter(({ node: related }) => evidenceKinds.has(related.kind))
+
   const relations = useMemo(() => {
     if (!node) return { supporting: 0, contradicting: 0, related: 0 }
-    const connected = edges.filter((edge) => edge.source_node_id === node.id || edge.target_node_id === node.id)
     return {
-      supporting: connected.filter((edge) => edge.kind === 'supports').length,
-      contradicting: connected.filter((edge) => edge.kind === 'contradicts').length,
-      related: connected.length,
+      supporting: connectedEdges.filter((edge) => edge.kind === 'supports').length,
+      contradicting: connectedEdges.filter((edge) => edge.kind === 'contradicts').length,
+      related: connectedEdges.length,
     }
-  }, [edges, node])
+  }, [connectedEdges, node])
 
   return (
     <aside className="inspector panel">
@@ -59,7 +66,7 @@ export function Inspector() {
           </div>
 
           <div className="inspector-tabs" role="tablist">
-            {tabs.map((tab) => (
+          {tabs.map((tab) => (
               <button
                 key={tab}
                 role="tab"
@@ -72,17 +79,7 @@ export function Inspector() {
             ))}
           </div>
 
-          {activeTab === 'Decompiler' || activeTab === 'Assembly' ? (
-            <section className="editor-panel">
-              <div className="editor-meta">
-                <span><FileCode2 size={12} /> {activeTab === 'Assembly' ? 'sub_401200.asm' : 'sub_401200.c'}</span>
-                <code>artifact: decompile_401200</code>
-              </div>
-              <Suspense fallback={<div className="code-loading">Loading code view...</div>}>
-                <CodePanel mode={activeTab === 'Assembly' ? 'assembly' : 'decompiler'} />
-              </Suspense>
-            </section>
-          ) : activeTab === 'Overview' ? (
+          {activeTab === 'Overview' ? (
             <div className="overview-panel">
               <div className="summary-metrics">
                 <div><span>Confidence</span><strong>{Math.round(node.confidence * 100)}%</strong></div>
@@ -99,13 +96,6 @@ export function Inspector() {
                       <span className="support"><CheckCircle2 size={12} /> {relations.supporting} supporting</span>
                       <span className="conflict"><ShieldAlert size={12} /> {relations.contradicting} contradicting</span>
                     </div>
-                  </section>
-                  <section className="inspector-block">
-                    <h3><ListTree size={13} /> Unresolved questions</h3>
-                    <ul className="question-list">
-                      <li>Is a complete key schedule present?</li>
-                      <li>Does the dynamic trace confirm all input bytes?</li>
-                    </ul>
                   </section>
                 </>
               ) : null}
@@ -127,11 +117,38 @@ export function Inspector() {
                 <code>{new Date(node.created_at).toLocaleString()}</code>
               </section>
             </div>
+          ) : activeTab === 'Evidence' ? (
+            <div className="inspector-list">
+              {evidenceNodes.length ? evidenceNodes.map(({ edge, node: related }) => (
+                <button key={edge.id} className="inspector-entity-row" onClick={() => selectNode(related.id)}>
+                  <span className={`entity-kind kind-${related.kind.toLowerCase()}`}>{related.kind}</span>
+                  <strong>{related.label}</strong>
+                  <small>{edge.kind.replaceAll('_', ' ')} · {Math.round(related.confidence * 100)}% confidence</small>
+                </button>
+              )) : <div className="inspector-empty"><ListTree size={18} /><span>No evidence is directly linked to this node.</span></div>}
+            </div>
+          ) : activeTab === 'Relations' ? (
+            <div className="inspector-list">
+              {connectedNodes.length ? connectedNodes.map(({ edge, node: related }) => (
+                <button key={edge.id} className="inspector-entity-row" onClick={() => selectNode(related.id)}>
+                  <span className="entity-kind">{edge.kind.replaceAll('_', ' ')}</span>
+                  <strong>{related.label}</strong>
+                  <small>{related.kind} · {related.status}</small>
+                </button>
+              )) : <div className="inspector-empty"><ListTree size={18} /><span>No linked entities.</span></div>}
+            </div>
           ) : (
-            <div className="tab-empty">
-              <ListTree size={20} />
-              <strong>{activeTab}</strong>
-              <span>No additional entities in the current local context.</span>
+            <div className="inspector-raw">
+              <div className="raw-identity"><span>Canonical key</span><code>{node.entity_key}</code></div>
+              <pre>{JSON.stringify({
+                graph_type: node.graph_type,
+                kind: node.kind,
+                status: node.status,
+                confidence: node.confidence,
+                properties: node.properties,
+                created_by: node.created_by,
+                created_at: node.created_at,
+              }, null, 2)}</pre>
             </div>
           )}
         </div>

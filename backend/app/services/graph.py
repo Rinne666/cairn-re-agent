@@ -1,3 +1,4 @@
+import re
 from collections import deque
 
 from sqlalchemy import or_, select
@@ -7,16 +8,64 @@ from app.models import GraphEdge, GraphNode
 from app.schemas import EdgeCreate, GraphSnapshot, NodeCreate
 from app.services.events import emit_event
 
+ADDRESS_ENTITY_KINDS = {"Function", "BasicBlock", "String", "Constant", "API", "Variable"}
+
+
+def _canonical_address(value: object) -> str | None:
+    if isinstance(value, int):
+        return format(value, "x")
+    if not isinstance(value, str):
+        return None
+    address = value.strip().lower()
+    if address.startswith("0x"):
+        address = address[2:]
+    address = re.sub(r"^0+(?=[0-9a-f])", "", address)
+    return address or None
+
+
+def _canonical_entity_key(project_id: str, data: NodeCreate) -> str:
+    if data.kind in ADDRESS_ENTITY_KINDS:
+        address = _canonical_address(data.properties.get("address"))
+        if address:
+            scope = data.binary_id or project_id
+            return f"{data.kind.lower()}:{scope}:0x{address}"
+    return data.entity_key
+
 
 async def upsert_node(session: AsyncSession, project_id: str, data: NodeCreate) -> GraphNode:
+    entity_key = _canonical_entity_key(project_id, data)
     node = await session.scalar(
         select(GraphNode).where(
-            GraphNode.project_id == project_id, GraphNode.entity_key == data.entity_key
+            GraphNode.project_id == project_id, GraphNode.entity_key == entity_key
         )
     )
+    if node is None and entity_key != data.entity_key and data.kind in ADDRESS_ENTITY_KINDS:
+        address = _canonical_address(data.properties.get("address"))
+        candidates = await session.scalars(
+            select(GraphNode).where(
+                GraphNode.project_id == project_id,
+                GraphNode.kind == data.kind,
+                GraphNode.binary_id == data.binary_id,
+            )
+        )
+        node = next(
+            (
+                candidate
+                for candidate in candidates
+                if _canonical_address(candidate.properties.get("address")) == address
+            ),
+            None,
+        )
+        if node is not None:
+            node.entity_key = entity_key
+
     created = node is None
     if node is None:
-        node = GraphNode(project_id=project_id, **data.model_dump())
+        node = GraphNode(
+            project_id=project_id,
+            **data.model_dump(exclude={"entity_key"}),
+            entity_key=entity_key,
+        )
         session.add(node)
     else:
         node.label = data.label

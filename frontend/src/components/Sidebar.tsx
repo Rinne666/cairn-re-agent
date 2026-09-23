@@ -13,6 +13,7 @@ import {
 
 import { useCairnStore } from '../store'
 import type { WorkspaceSection } from '../types'
+import { isConfirmedFact } from './graphProjection'
 
 const sections: Array<{ id: WorkspaceSection; label: string; icon: typeof GitBranch }> = [
   { id: 'exploration', label: 'Exploration', icon: GitBranch },
@@ -31,7 +32,7 @@ export function Sidebar() {
   const workers = useCairnStore((state) => state.workers)
   const runWorker = useCairnStore((state) => state.runWorker)
   const runningWorkerId = useCairnStore((state) => state.runningWorkerId)
-  const facts = nodes.filter((node) => node.kind === 'Fact').slice(0, 3)
+  const facts = nodes.filter(isConfirmedFact).slice(0, 3)
   const visibleIntents = intents.filter((intent) => intent.status !== 'failed').slice(0, 4)
   const failures = intents.filter((intent) => intent.status === 'failed')
 
