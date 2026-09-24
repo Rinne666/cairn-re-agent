@@ -326,6 +326,7 @@ def test_pi_prompt_enforces_evidence_separation_and_explicit_graph_relations():
         "Insufficient evidence is not a worker execution failure",
         "status is completed when the context was analyzed, even if no conclusion is supported",
         "Use failed only if you cannot analyze the request or produce a WorkerOutput",
+        "Do not return only reasoning or an empty text message",
     ):
         assert required.lower() in prompt.lower() or required.lower() in SYSTEM_PROMPT.lower()
 
