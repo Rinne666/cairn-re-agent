@@ -72,8 +72,11 @@ def _configured_provider_model(command: str) -> tuple[str, str]:
         if part == "--model" and index + 1 < len(parts):
             model = parts[index + 1]
     if model and "/" in model:
-        provider_from_model, model = model.split("/", 1)
-        provider = provider or provider_from_model
+        prefix, model_suffix = model.split("/", 1)
+        if provider is None:
+            provider, model = prefix, model_suffix
+        elif provider == prefix:
+            model = model_suffix
     if not provider or not model:
         raise RuntimeError(
             "For reproducibility set CAIRN_PI_COMMAND with explicit --provider and --model"

@@ -68,6 +68,9 @@ def test_provider_and_model_are_explicit_for_reproducibility():
         "anthropic",
         "claude-haiku-4-5",
     )
+    assert _configured_provider_model(
+        "pi --provider sdu --model ByteDance-volcengine/DeepSeek-V4-Flash-GA"
+    ) == ("sdu", "ByteDance-volcengine/DeepSeek-V4-Flash-GA")
     with pytest.raises(RuntimeError, match="explicit --provider and --model"):
         _configured_provider_model("pi")
 
