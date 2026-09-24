@@ -1,12 +1,172 @@
-from sqlalchemy.ext.asyncio import AsyncSession
+import asyncio
+from contextlib import suppress
+from datetime import timedelta
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.config import get_settings
 from app.drivers import get_driver
-from app.models import GraphNode, Project, Worker, WorkerRun, utcnow
+from app.models import GraphNode, Intent, Project, Worker, WorkerRun, utcnow
 from app.schemas import EdgeCreate, IntentCreate, NodeCreate, PrioritySignals, RunResult
 from app.services.context import assemble_context
 from app.services.events import emit_event
 from app.services.graph import upsert_edge, upsert_node
-from app.services.intents import claim_next_intent, create_intent
+from app.services.intents import claim_next_intent, create_intent, intent_key
+from app.worker_protocol import AgentRun, WorkerOutput
+
+
+class WorkerOutputError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        unsupported_facts: int = 0,
+        unresolved_relations: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.unsupported_facts = unsupported_facts
+        self.unresolved_relations = unresolved_relations
+
+
+async def _renew_lease_loop(
+    session: AsyncSession,
+    intent_id: str,
+    worker_id: str,
+    stop: asyncio.Event,
+) -> None:
+    session_factory = async_sessionmaker(session.bind, expire_on_commit=False)
+    interval = min(30.0, max(0.1, get_settings().intent_lease_seconds / 3))
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+            return
+        except TimeoutError:
+            pass
+        async with session_factory() as heartbeat_session:
+            intent = await heartbeat_session.get(Intent, intent_id)
+            worker = await heartbeat_session.get(Worker, worker_id)
+            if (
+                intent is None
+                or worker is None
+                or intent.worker_id != worker_id
+                or intent.status != "running"
+            ):
+                raise RuntimeError("worker lease lost")
+            now = utcnow()
+            intent.heartbeat_at = now
+            intent.lease_until = now + timedelta(seconds=get_settings().intent_lease_seconds)
+            worker.last_seen_at = now
+            await heartbeat_session.commit()
+
+
+async def _run_driver_with_heartbeat(
+    session: AsyncSession, intent_id: str, worker_id: str, driver, context
+) -> AgentRun:
+    stop = asyncio.Event()
+    heartbeat_task = asyncio.create_task(_renew_lease_loop(session, intent_id, worker_id, stop))
+    driver_task = asyncio.create_task(driver.run_agent(context))
+    done, _ = await asyncio.wait({driver_task, heartbeat_task}, return_when=asyncio.FIRST_COMPLETED)
+    if heartbeat_task in done and heartbeat_task.exception() is not None:
+        driver_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await driver_task
+        raise RuntimeError(f"worker heartbeat failed: {heartbeat_task.exception()}")
+    try:
+        return await driver_task
+    finally:
+        stop.set()
+        await heartbeat_task
+
+
+def _run_metrics(
+    agent_run: AgentRun,
+    output: WorkerOutput | None,
+    unsupported_facts: int = 0,
+    unresolved_relations: int = 0,
+) -> dict:
+    counts = {
+        "observations": len(output.observations) if output else 0,
+        "evidence": len(output.evidence) if output else 0,
+        "hypotheses": len(output.hypotheses) if output else 0,
+        "facts": len(output.facts) if output else 0,
+        "relations": len(output.relations) if output else 0,
+        "suggested_intents": len(output.suggested_intents) if output else 0,
+        "artifacts": len(output.artifacts) if output else 0,
+    }
+    return {
+        "schema_valid": agent_run.schema_valid,
+        "retry_count": agent_run.retry_count,
+        "schema_invalid_attempts": agent_run.schema_invalid_attempts,
+        "duration_seconds": round(agent_run.duration_seconds, 6),
+        "token_input": agent_run.token_input,
+        "token_output": agent_run.token_output,
+        **{f"output_{name}_count": count for name, count in counts.items()},
+        "duplicate_intent_count": 0,
+        "unsupported_fact_count": unsupported_facts,
+        "unresolved_relation_count": unresolved_relations,
+        "unsupported_fact_rate": (unsupported_facts / counts["facts"] if counts["facts"] else 0.0),
+        "diagnostics": {"stdout": agent_run.stdout, "stderr": agent_run.stderr},
+    }
+
+
+async def _finish_failed_run(
+    session: AsyncSession,
+    project_id: str,
+    worker_id: str,
+    intent_id: str,
+    run_id: str,
+    agent_run: AgentRun,
+    error: str,
+    output: WorkerOutput | None = None,
+    unsupported_facts: int = 0,
+    unresolved_relations: int = 0,
+) -> RunResult:
+    await session.rollback()
+    intent = await session.get(Intent, intent_id)
+    worker = await session.get(Worker, worker_id)
+    run = await session.get(WorkerRun, run_id)
+    if intent is None or worker is None or run is None:
+        raise RuntimeError("cannot persist failed worker outcome: run state disappeared")
+    now = utcnow()
+    intent.status = "failed"
+    intent.completed_at = now
+    intent.lease_until = None
+    intent_node = await session.get(GraphNode, intent.metadata_json.get("exploration_node_id"))
+    if intent_node:
+        intent_node.status = "failed"
+        intent_node.properties = {**intent_node.properties, "status": "failed"}
+    worker.status = "idle"
+    worker.last_seen_at = now
+    worker.metadata_json = {**worker.metadata_json, "last_run_status": "failed"}
+    run.status = "failed"
+    run.error = error
+    run.finished_at = now
+    run.token_input = agent_run.token_input
+    run.token_output = agent_run.token_output
+    run.output_summary = {
+        **_run_metrics(agent_run, output, unsupported_facts, unresolved_relations),
+        "worker_output": output.model_dump() if output else None,
+        "error": error,
+    }
+    await emit_event(
+        session,
+        project_id,
+        "intent.failed",
+        {"intent_id": intent_id, "worker_id": worker_id, "error": error},
+    )
+    await emit_event(
+        session, project_id, "worker.finished", {"worker_id": worker_id, "worker_run_id": run_id}
+    )
+    await session.commit()
+    return RunResult(
+        worker_id=worker_id,
+        intent_id=intent_id,
+        worker_run_id=run_id,
+        status="failed",
+        created_nodes=0,
+        created_intents=0,
+    )
 
 
 async def run_once(session: AsyncSession, project_id: str, worker_id: str) -> RunResult | None:
@@ -28,104 +188,168 @@ async def run_once(session: AsyncSession, project_id: str, worker_id: str) -> Ru
     await emit_event(
         session, project_id, "worker.started", {"worker_id": worker_id, "intent_id": intent.id}
     )
-
     driver = get_driver(worker.driver)
+    await session.commit()
+    agent_run = AgentRun(None, 0.0)
+    output: WorkerOutput | None = None
+    unsupported_facts = 0
+    unresolved_relations = 0
     try:
-        output = await driver.run_agent(context)
-        entity_nodes: dict[str, GraphNode] = {}
-        created_nodes = 0
-        for graph_type, findings in (
-            ("evidence", output.observations),
-            ("evidence", output.evidence),
-            ("evidence", output.hypotheses),
-            ("exploration", output.facts),
-        ):
-            for finding in findings:
-                node = await upsert_node(
-                    session,
-                    project_id,
-                    NodeCreate(
-                        graph_type=graph_type,
-                        kind=finding.kind,
-                        label=finding.label,
-                        entity_key=finding.entity_key,
-                        properties={
-                            **finding.properties,
-                            "provenance": {
-                                **finding.properties.get("provenance", {}),
-                                "worker_run_id": run.id,
-                            },
-                        },
-                        confidence=finding.confidence,
-                        created_by=f"worker:{worker_id}",
-                    ),
-                )
-                entity_nodes[finding.entity_key] = node
-                created_nodes += 1
-
-        observation_nodes = [
-            entity_nodes[item.entity_key]
-            for item in output.observations
-            if item.entity_key in entity_nodes
-        ]
-        for evidence in output.evidence:
-            evidence_node = entity_nodes.get(evidence.entity_key)
-            if evidence_node:
-                for observation in observation_nodes:
-                    await upsert_edge(
-                        session,
-                        project_id,
-                        EdgeCreate(
-                            source_node_id=evidence_node.id,
-                            target_node_id=observation.id,
-                            kind="derived_from",
-                            created_by=f"worker:{worker_id}",
-                        ),
-                    )
-        evidence_nodes = [
-            entity_nodes[item.entity_key]
-            for item in output.evidence
-            if item.entity_key in entity_nodes
-        ]
-        for hypothesis in output.hypotheses:
-            hypothesis_node = entity_nodes.get(hypothesis.entity_key)
-            if hypothesis_node:
-                for evidence_node in evidence_nodes:
-                    await upsert_edge(
-                        session,
-                        project_id,
-                        EdgeCreate(
-                            source_node_id=evidence_node.id,
-                            target_node_id=hypothesis_node.id,
-                            kind="supports",
-                            created_by=f"worker:{worker_id}",
-                        ),
-                    )
-
-        created_intents = 0
-        for suggested in output.suggested_intents:
-            source_ids = [
-                entity_nodes[key].id for key in suggested.source_entity_keys if key in entity_nodes
-            ]
-            await create_intent(
+        agent_run = await _run_driver_with_heartbeat(session, intent.id, worker_id, driver, context)
+        output = agent_run.output
+        if output is None:
+            return await _finish_failed_run(
                 session,
                 project_id,
-                IntentCreate(
-                    description=suggested.description,
-                    source_node_ids=source_ids,
-                    creator=f"worker:{worker_id}",
-                    signals=PrioritySignals(
-                        goal_relevance=suggested.goal_relevance,
-                        information_gain=suggested.information_gain,
-                        confidence=suggested.confidence,
-                        expected_cost=suggested.expected_cost,
-                    ),
+                worker_id,
+                intent.id,
+                run.id,
+                agent_run,
+                agent_run.error or "Worker returned no structured output",
+            )
+        if output.status == "failed":
+            return await _finish_failed_run(
+                session,
+                project_id,
+                worker_id,
+                intent.id,
+                run.id,
+                agent_run,
+                output.summary or "Worker reported failed status",
+                output=output,
+            )
+        if output.artifacts:
+            raise WorkerOutputError(
+                "artifacts are not accepted while no artifact tools are enabled"
+            )
+
+        existing_nodes = list(
+            (
+                await session.scalars(select(GraphNode).where(GraphNode.project_id == project_id))
+            ).all()
+        )
+        entity_nodes = {node.entity_key: node for node in existing_nodes}
+        all_findings = [
+            ("evidence", item)
+            for items in (output.observations, output.evidence, output.hypotheses)
+            for item in items
+        ] + [("exploration", item) for item in output.facts]
+        for _, finding in all_findings:
+            existing = entity_nodes.get(finding.entity_key)
+            if existing and existing.kind != finding.kind:
+                raise WorkerOutputError(
+                    f"finding entity_key {finding.entity_key!r} conflicts with existing "
+                    f"node kind {existing.kind!r}"
+                )
+        returned_keys = {finding.entity_key for _, finding in all_findings}
+        available_keys = set(entity_nodes) | returned_keys
+        for relation in output.relations:
+            if (
+                relation.source_entity_key not in available_keys
+                or relation.target_entity_key not in available_keys
+            ):
+                unresolved_relations += 1
+                raise WorkerOutputError(
+                    "unresolved relation endpoint: "
+                    f"{relation.source_entity_key} -> {relation.target_entity_key}",
+                    unresolved_relations=unresolved_relations,
+                )
+        returned_evidence = {item.entity_key for item in output.evidence}
+        existing_evidence = {node.entity_key for node in existing_nodes if node.kind == "Evidence"}
+        for fact in output.facts:
+            verified = any(
+                relation.source_entity_key == fact.entity_key
+                and relation.kind == "verified_by"
+                and relation.target_entity_key in returned_evidence | existing_evidence
+                for relation in output.relations
+            )
+            if not verified:
+                unsupported_facts += 1
+        if unsupported_facts:
+            raise WorkerOutputError(
+                f"{unsupported_facts} Fact finding(s) lack explicit verified_by Evidence relation",
+                unsupported_facts=unsupported_facts,
+            )
+        for suggested in output.suggested_intents:
+            unresolved = set(suggested.source_entity_keys) - available_keys
+            if unresolved:
+                raise WorkerOutputError(
+                    f"unresolved suggested intent source(s): {', '.join(sorted(unresolved))}"
+                )
+
+        created_nodes = 0
+        for graph_type, finding in all_findings:
+            was_new = finding.entity_key not in entity_nodes
+            node = await upsert_node(
+                session,
+                project_id,
+                NodeCreate(
+                    graph_type=graph_type,
+                    kind=finding.kind,
+                    label=finding.label,
+                    entity_key=finding.entity_key,
+                    properties={
+                        **finding.properties,
+                        "provenance": {
+                            **finding.properties.get("provenance", {}),
+                            "worker_run_id": run.id,
+                        },
+                    },
+                    confidence=finding.confidence,
+                    created_by=f"worker:{worker_id}",
                 ),
             )
-            created_intents += 1
+            entity_nodes[finding.entity_key] = node
+            created_nodes += int(was_new)
+
+        for relation in output.relations:
+            await upsert_edge(
+                session,
+                project_id,
+                EdgeCreate(
+                    source_node_id=entity_nodes[relation.source_entity_key].id,
+                    target_node_id=entity_nodes[relation.target_entity_key].id,
+                    kind=relation.kind,
+                    properties=relation.properties,
+                    created_by=f"worker:{worker_id}",
+                ),
+            )
+
+        created_intents = duplicate_intents = 0
+        for suggested in output.suggested_intents:
+            source_ids = [
+                entity_nodes[key].id for key in dict.fromkeys(suggested.source_entity_keys)
+            ]
+            create_data = IntentCreate(
+                description=suggested.description,
+                source_node_ids=source_ids,
+                creator=f"worker:{worker_id}",
+                signals=PrioritySignals(
+                    goal_relevance=suggested.goal_relevance,
+                    information_gain=suggested.information_gain,
+                    confidence=suggested.confidence,
+                    expected_cost=suggested.expected_cost,
+                ),
+            )
+            dedupe = intent_key(create_data.description, create_data.source_node_ids)
+            existing = await session.scalar(
+                select(Intent).where(Intent.project_id == project_id, Intent.dedupe_key == dedupe)
+            )
+            await create_intent(session, project_id, create_data, create_source_edges=False)
+            if existing:
+                duplicate_intents += 1
+            else:
+                created_intents += 1
+
+        agent_run_metrics = _run_metrics(agent_run, output)
+        agent_run_metrics["duplicate_intent_count"] = duplicate_intents
+        agent_run_metrics["duplicate_intent_rate"] = (
+            duplicate_intents / len(output.suggested_intents) if output.suggested_intents else 0.0
+        )
 
         intent.status = "completed"
         intent.completed_at = utcnow()
+        intent.lease_until = None
         if output.hypotheses:
             intent.result_node_id = entity_nodes[output.hypotheses[0].entity_key].id
         intent_node = await session.get(GraphNode, intent.metadata_json.get("exploration_node_id"))
@@ -136,21 +360,13 @@ async def run_once(session: AsyncSession, project_id: str, worker_id: str) -> Ru
                 "status": "completed",
                 "result_node_id": intent.result_node_id,
             }
-            if intent.result_node_id:
-                await upsert_edge(
-                    session,
-                    project_id,
-                    EdgeCreate(
-                        source_node_id=intent_node.id,
-                        target_node_id=intent.result_node_id,
-                        kind="produced",
-                        created_by=f"worker:{worker_id}",
-                    ),
-                )
         worker.status = "idle"
         worker.last_seen_at = utcnow()
-        run.status = output.status
-        run.output_summary = output.model_dump()
+        worker.metadata_json = {**worker.metadata_json, "last_run_status": "completed"}
+        run.status = "completed"
+        run.output_summary = {**agent_run_metrics, "worker_output": output.model_dump()}
+        run.token_input = agent_run.token_input
+        run.token_output = agent_run.token_output
         run.finished_at = utcnow()
         await emit_event(
             session,
@@ -168,27 +384,30 @@ async def run_once(session: AsyncSession, project_id: str, worker_id: str) -> Ru
             "worker.finished",
             {"worker_id": worker_id, "worker_run_id": run.id},
         )
+        await session.commit()
         return RunResult(
             worker_id=worker_id,
             intent_id=intent.id,
             worker_run_id=run.id,
-            status=output.status,
+            status="completed",
             created_nodes=created_nodes,
             created_intents=created_intents,
         )
     except Exception as exc:
-        intent.status = "failed"
-        worker.status = "idle"
-        run.status = "failed"
-        run.error = str(exc)
-        run.finished_at = utcnow()
-        await emit_event(
+        unsupported_facts = getattr(exc, "unsupported_facts", unsupported_facts)
+        unresolved_relations = getattr(exc, "unresolved_relations", unresolved_relations)
+        return await _finish_failed_run(
             session,
             project_id,
-            "intent.failed",
-            {"intent_id": intent.id, "worker_id": worker_id, "error": str(exc)},
+            worker_id,
+            intent.id,
+            run.id,
+            agent_run,
+            str(exc),
+            output=output,
+            unsupported_facts=unsupported_facts,
+            unresolved_relations=unresolved_relations,
         )
-        raise
 
 
 async def seed_demo(session: AsyncSession) -> Project:

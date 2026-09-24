@@ -34,7 +34,13 @@ def score_intent(data: IntentCreate) -> float:
     return round(min(1.0, numerator / max(cost, 0.1)), 4)
 
 
-async def create_intent(session: AsyncSession, project_id: str, data: IntentCreate) -> Intent:
+async def create_intent(
+    session: AsyncSession,
+    project_id: str,
+    data: IntentCreate,
+    *,
+    create_source_edges: bool = True,
+) -> Intent:
     dedupe = intent_key(data.description, data.source_node_ids)
     existing = await session.scalar(
         select(Intent).where(Intent.project_id == project_id, Intent.dedupe_key == dedupe)
@@ -68,16 +74,17 @@ async def create_intent(session: AsyncSession, project_id: str, data: IntentCrea
     intent.metadata_json = {**intent.metadata_json, "exploration_node_id": intent_node.id}
     for node_id in dict.fromkeys(data.source_node_ids):
         session.add(IntentSource(intent_id=intent.id, node_id=node_id))
-        await upsert_edge(
-            session,
-            project_id,
-            EdgeCreate(
-                source_node_id=node_id,
-                target_node_id=intent_node.id,
-                kind="motivates",
-                created_by=data.creator,
-            ),
-        )
+        if create_source_edges:
+            await upsert_edge(
+                session,
+                project_id,
+                EdgeCreate(
+                    source_node_id=node_id,
+                    target_node_id=intent_node.id,
+                    kind="motivates",
+                    created_by=data.creator,
+                ),
+            )
     await emit_event(
         session,
         project_id,

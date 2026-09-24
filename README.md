@@ -69,6 +69,19 @@ The included drivers are:
 - `mock` — deterministic and safe; exercises the full orchestration path.
 - `pi` — JSON-over-stdio adapter configured by `CAIRN_PI_COMMAND`.
 
+To verify the real Pi closed loop, configure an available Pi provider/model explicitly
+and run this from `backend` (the experiment creates a fresh demo project in the configured
+database and makes no reverse-tool calls):
+
+```powershell
+$env:CAIRN_PI_COMMAND = "pi --provider openai --model gpt-4.1-mini"
+python -m app.verify_pi_worker --runs 20
+```
+
+The command reports persisted WorkerRun IDs, schema/retry/finding metrics, tokens,
+durations, and graph/intent deduplication checks. The model/provider must be reachable
+and have usable quota; auth readiness alone does not prove API availability.
+
 See [the architecture note](docs/architecture.md) for invariants and extension points.
 
 ## Implemented API surface
