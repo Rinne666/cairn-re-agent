@@ -1,41 +1,40 @@
 # Real Pi Worker closed-loop experiment
 
-**Status: incomplete — the required 20 successful runs have not been demonstrated.**
+**Status: passed.** The final SDU experiment completed 20/20 real Pi Worker runs with consistent WorkerRun/Intent/Worker state and no unsupported Fact or duplicate-intent ingestion.
 
 ## What changed
 
-- Made `WorkerOutput` strict and explicit, including relation endpoints and the seven allowed relation kinds.
-- Added Pi CLI isolation, JSONL final-message extraction, one schema-only retry, Windows npm-shim resolution, raw diagnostics, and first-provider-error termination.
-- Made context include local graph relations with `available_tools=[]`.
-- Changed graph ingestion to prevalidate endpoints and Fact verification, ingest only explicit relations, deduplicate suggested intents, and persist failures without semantic graph writes.
-- Added lease heartbeat, generic per-run telemetry, and `python -m app.verify_pi_worker --runs 20`.
+- Kept the Graph Engine → Worker Protocol → AgentDriver → PiDriver boundary; Graph services do not import Pi.
+- WorkerOutput findings and all seven relation kinds remain explicit. Graph ingestion creates only returned relations; no evidence/observation Cartesian products.
+- Tightened Pi output guidance: insufficient evidence is a completed analysis, Facts require `verified_by` Evidence, and the final assistant text must contain JSON.
+- Added context-aware Pydantic validation for Fact verification so one schema retry can correct unsupported Facts before Graph ingestion.
+- Raised the Pi JSONL stream line limit to 1 MiB after a real large-event failure. Added strict telemetry and the sequential `--runs 20` verifier.
 
-## Real Pi attempts and observed failures
+## Final real run
 
-Pi CLI version: `0.84.4`. Four real Pi WorkerRuns were persisted across smoke/preflight attempts; none received a model response that could be validated as `WorkerOutput`.
+- Experiment: `80a3e682-5176-4bdd-a57c-918fff2ab8b1`; project: `bdd5b876-3331-4ab0-9855-5cb06d48733a`.
+- Pi `0.84.4`, provider `sdu`, model `ByteDance-volcengine/DeepSeek-V4-Flash-GA`.
+- 20/20 WorkerRuns completed; 21 Pi process invocations (one schema retry); state consistent; `available_tools=[]` throughout.
+- 1/21 invalid-schema attempt (**4.76%**) was an empty-text first response and was corrected by the single retry; 0 unsupported Facts / 13 Facts; 0 duplicate suggested Intents / 51 suggestions; 0 unresolved relations.
+- 79 observations, 48 evidence, 20 hypotheses, 13 facts, 194 explicit relation records, 51 suggested intents. The graph contained 107 canonical nodes and 64 edges; duplicate graph nodes/edges were 0, and all returned relation endpoints and edges were verified in the database.
+- Input/output tokens: 132,522 / 198,067. Total duration: 1,782.38 s; mean 89.12 s per WorkerRun.
+- Prompt SHA-256: `bd6d992e1b33936f0972ccf29c0f309ef78ddf6a427b9a1d147acae916b63b93`; WorkerOutput schema SHA-256: `79eb813a53957790449127ba244b7aebeb9967ce7ed56e73c7993b4690a968ca`.
 
-| Provider / model | WorkerRun ID | Result |
-| --- | --- | --- |
-| `minimax-cn` / configured default `MiniMax-M3` | `f6db2626-a6bd-4f1f-9c3c-cc35f6f73056` | HTTP 429: local token-plan quota exhausted. This exposed Pi's internal retries and the adapter's then-missing API-error detection; both are now handled by stopping on the first error event. |
-| `openai` / `gpt-4.1-mini` | `3c2893e5-18ac-4784-a47a-65ae134f0141` | Pi returned `Request timed out.` |
-| `openai` / `gpt-4.1-mini` | `640a3869-13dc-4689-a555-bdd322496c7d` | Fail-fast verifier smoke; `Request timed out.` after one Pi process invocation. |
-| `anthropic` / `claude-haiku-4-5` | `9760c323-a9be-4505-b39d-4a0d847524e3` | HTTP 403: `Request not allowed`. |
+## Observed failure modes
 
-Across those four diagnostic runs: **0/4 schema-valid completions**, **0 input / 0 output tokens**, and **105.36 seconds** total recorded driver duration. The first run (before API-error classification was fixed) recorded one schema retry and two invalid empty responses; the later three runs correctly recorded zero schema retries and zero schema-invalid attempts because they failed at the provider boundary. These diagnostic probes span adapter revisions and are not a substitute for the final 20-run rate calculation.
+- MiniMax exhausted its provider quota; Kimi completed five runs, then returned HTTP 403 for its five-hour quota. These were provider limits, not Graph mutations.
+- An earlier SDU batch was interrupted when its parent process disappeared, leaving an expired running lease and a stale running WorkerRun in the isolated experiment DB. Hard process termination currently has no stale-run reconciler.
+- The first SDU baseline exposed an asyncio default line-buffer limit on large Pi JSONL events; fixed by increasing the stream limit.
+- The next baseline completed 18/20: one output marked insufficient context as `failed`, one emitted Facts without explicit `verified_by`, and one retry returned reasoning-only content. Prompt semantics, contextual validation/retry, and final-text requirements were tightened; the final 20-run batch had none of these failures.
 
-Each failed run persisted `WorkerRun=failed`, `Intent=failed`, `Worker.status=idle`, and `Worker.metadata.last_run_status=failed`. Each demo project retained only its six seeded nodes and five seeded edges; no Worker finding or relation was ingested.
+## Protocol weaknesses and Ghidra readiness
 
-The 20-run verifier smoke records these identifiers and hashes:
+- The final experiment validates the Worker loop and generic driver boundary, not Ghidra artifacts or reverse-engineering accuracy; no real reverse tools were enabled.
+- The seven relation types and endpoint checks are enforced, with a semantic rule for Fact → Evidence. Other relation kinds intentionally have no richer ontology.
+- Ready to begin a separate Ghidra adapter integration at the existing boundary. Before production use, add recovery for process death/expired leases so stale running records are reconciled; this does not invalidate the clean 20-run result.
 
-- OpenAI preflight experiment: `6c7c5165-7540-4bdd-abc7-58c8cd20f4bd`; project `4411e625-cf9e-45b7-b9bc-9e79430f0bdc`.
-- Anthropic preflight experiment: `d8e5b3ea-8610-431e-9eb8-bf80b115d756`; project `65ba2c83-761d-4844-83ad-504b6cbb6920`.
-- Prompt SHA-256: `7960231caae958fea57d7aa3f0914de07729d1211f14bdacc18846bdaa36c4b7`.
-- WorkerOutput schema SHA-256: `79eb813a53957790449127ba244b7aebeb9967ce7ed56e73c7993b4690a968ca`.
-- Database: isolated worktree `backend/cairn.db`.
+## Verification
 
-## Verification and remaining work
-
-- Deterministic backend tests: **84 passed**; Ruff: **all checks passed**; `git diff --check` is clean.
-- The verifier's control path was exercised with deterministic tests for sequential run count, empty tools, continuation intents, and fail-fast reporting; those tests do not count as real Pi runs.
-- Protocol weakness still worth observing during a successful run: non-Fact relations are restricted to the seven core names and real endpoints, but only Fact → Evidence has a semantic type rule. No broader ontology was added.
-- **Ghidra integration is not ready to claim**: the architecture boundary is in place, but the essential real-Pi structured-output loop has not passed. Resume the exact 20-run command after a configured provider has usable quota and network access.
+- Backend tests: **87 passed**; Ruff: **all checks passed**; `git diff --check`: clean.
+- Final verifier report: `passed=true`, `state_consistent=true`, 20 persisted and 20 schema-valid completed outputs.
+- Implementation commits: `7f9099d`, `e0e60da`, `6e36f69`, `9c8e62a`.
