@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -186,6 +187,20 @@ async def test_pi_api_error_is_process_failure_not_schema_retry(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pi_driver_reads_jsonl_events_larger_than_default_stream_limit():
+    source = "import json; print(json.dumps({'type': 'agent_end', 'payload': 'x' * 100_000}))"
+
+    returncode, stdout, stderr, interrupted = await PiDriver("unused")._invoke(
+        [sys.executable, "-c", source]
+    )
+
+    assert returncode == 0
+    assert len(stdout) > 100_000
+    assert stderr == ""
+    assert interrupted is False
+
+
+@pytest.mark.asyncio
 async def test_cancellation_kills_pi_child_process(monkeypatch):
     started = asyncio.Event()
 
@@ -276,6 +291,9 @@ def test_pi_prompt_enforces_evidence_separation_and_explicit_graph_relations():
         "derived_from",
         "contradicts",
         "at most three",
+        "Insufficient evidence is not a worker execution failure",
+        "status is completed when the context was analyzed, even if no conclusion is supported",
+        "Use failed only if you cannot analyze the request or produce a WorkerOutput",
     ):
         assert required.lower() in prompt.lower() or required.lower() in SYSTEM_PROMPT.lower()
 

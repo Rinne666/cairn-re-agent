@@ -43,7 +43,11 @@ SYSTEM_PROMPT = "\n".join(
         "source_entity_key, target_entity_key, kind, properties (object). Every suggested intent",
         "has description, source_entity_keys (array of strings), goal_relevance, information_gain,",
         "confidence, expected_cost; each rating is low, medium, or high. Artifacts must be [].",
-        "status is completed or failed. Include every field and no extra fields.",
+        "Status must be completed or failed.",
+        "Insufficient evidence is not a worker execution failure.",
+        "Status is completed when the context was analyzed, even if no conclusion is supported.",
+        "Use failed only if you cannot analyze the request or produce a WorkerOutput.",
+        "Include every field and no extra fields.",
     ]
 )
 
@@ -148,6 +152,7 @@ class PiDriver:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024,
         )
         stdout = bytearray()
         stderr_task = asyncio.create_task(process.stderr.read())
