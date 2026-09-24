@@ -251,7 +251,14 @@ class PiDriver:
                 text, in_tokens, out_tokens = self._final_assistant_text(last_stdout)
                 total_input += in_tokens
                 total_output += out_tokens
-                output = WorkerOutput.model_validate_json(text)
+                existing_evidence_keys = {
+                    item["entity_key"]
+                    for item in context.evidence
+                    if item.get("kind") == "Evidence" and isinstance(item.get("entity_key"), str)
+                }
+                output = WorkerOutput.model_validate_json(
+                    text, context={"evidence_keys": existing_evidence_keys}
+                )
                 return AgentRun(
                     output,
                     time.perf_counter() - started,

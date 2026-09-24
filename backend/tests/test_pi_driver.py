@@ -154,6 +154,38 @@ async def test_well_formed_failed_status_is_valid_and_not_retried(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fact_without_verified_by_evidence_gets_one_validation_retry(monkeypatch):
+    unsupported = valid_worker_output()
+    unsupported["facts"] = [
+        {
+            "kind": "Fact",
+            "label": "unsupported claim",
+            "entity_key": "fact:unsupported",
+            "properties": {},
+            "confidence": 0.9,
+        }
+    ]
+    processes = [
+        FakeProcess(0, event_stream(json.dumps(unsupported))),
+        FakeProcess(0, event_stream(json.dumps(valid_worker_output()))),
+    ]
+    prompts = []
+
+    async def spawn(*argv, **kwargs):
+        prompts.append(argv[-1])
+        return processes.pop(0)
+
+    monkeypatch.setattr("app.drivers.pi.asyncio.create_subprocess_exec", spawn)
+    run = await PiDriver("node C:/pi/cli.js").run_agent(context())
+
+    assert run.schema_valid is True
+    assert run.retry_count == 1
+    assert run.schema_invalid_attempts == 1
+    assert run.output.facts == []
+    assert "verified_by" in prompts[1]
+
+
+@pytest.mark.asyncio
 async def test_pi_api_error_is_process_failure_not_schema_retry(monkeypatch):
     calls = 0
     process = None

@@ -10,6 +10,7 @@ from pydantic import (
     StrictFloat,
     StrictInt,
     StrictStr,
+    ValidationInfo,
     model_validator,
 )
 
@@ -91,7 +92,7 @@ class WorkerOutput(BaseModel):
     summary: StrictStr
 
     @model_validator(mode="after")
-    def validate_findings(self) -> WorkerOutput:
+    def validate_findings(self, info: ValidationInfo) -> WorkerOutput:
         categories = {
             "Observation": self.observations,
             "Evidence": self.evidence,
@@ -106,6 +107,20 @@ class WorkerOutput(BaseModel):
                 if finding.entity_key in seen:
                     raise ValueError(f"duplicate finding entity_key: {finding.entity_key}")
                 seen.add(finding.entity_key)
+        if info.context is not None and "evidence_keys" in info.context:
+            evidence_keys = {finding.entity_key for finding in self.evidence}
+            evidence_keys.update(info.context["evidence_keys"])
+            for fact in self.facts:
+                if not any(
+                    relation.source_entity_key == fact.entity_key
+                    and relation.target_entity_key in evidence_keys
+                    and relation.kind == "verified_by"
+                    for relation in self.relations
+                ):
+                    raise ValueError(
+                        f"Fact {fact.entity_key!r} requires an explicit verified_by "
+                        "Evidence relation"
+                    )
         return self
 
 

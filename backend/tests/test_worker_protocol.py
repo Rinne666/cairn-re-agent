@@ -57,6 +57,33 @@ def test_worker_output_accepts_all_required_fields_and_explicit_relation():
     assert output.observations[0].entity_key == "obs:1"
 
 
+def test_context_validation_requires_every_fact_to_verify_against_evidence():
+    payload = valid_output()
+    payload["facts"] = [
+        {
+            "kind": "Fact",
+            "label": "validated claim",
+            "entity_key": "fact:1",
+            "properties": {},
+            "confidence": 0.9,
+        }
+    ]
+    evidence_keys = {"ev:1"}
+    with pytest.raises(ValidationError, match="verified_by"):
+        WorkerOutput.model_validate(payload, context={"evidence_keys": evidence_keys})
+
+    payload["relations"].append(
+        {
+            "source_entity_key": "fact:1",
+            "target_entity_key": "ev:1",
+            "kind": "verified_by",
+            "properties": {},
+        }
+    )
+    output = WorkerOutput.model_validate(payload, context={"evidence_keys": evidence_keys})
+    assert output.facts[0].entity_key == "fact:1"
+
+
 @pytest.mark.parametrize(
     "field",
     [
