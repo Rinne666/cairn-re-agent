@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from contextlib import suppress
 from datetime import timedelta
 
@@ -12,7 +13,7 @@ from app.schemas import EdgeCreate, IntentCreate, NodeCreate, PrioritySignals, R
 from app.services.context import assemble_context
 from app.services.events import emit_event
 from app.services.graph import upsert_edge, upsert_node
-from app.services.intents import claim_next_intent, create_intent, intent_key
+from app.services.intents import claim_next_intent, create_intent, normalize_intent
 from app.worker_protocol import AgentRun, WorkerOutput
 
 
@@ -315,35 +316,55 @@ async def run_once(session: AsyncSession, project_id: str, worker_id: str) -> Ru
                 ),
             )
 
-        created_intents = duplicate_intents = 0
+        duplicate_intents = 0
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise WorkerOutputError("project disappeared while applying worker output")
+        current_orchestrator_state = (project.config or {}).get("orchestrator", {})
+        if not isinstance(current_orchestrator_state, dict):
+            current_orchestrator_state = {}
+        raw_pending_proposals = current_orchestrator_state.get("pending_worker_proposals", [])
+        pending_proposals = (
+            list(raw_pending_proposals) if isinstance(raw_pending_proposals, list) else []
+        )
+        pending_ids = {
+            proposal.get("proposal_id")
+            for proposal in pending_proposals
+            if isinstance(proposal, dict)
+        }
         for suggested in output.suggested_intents:
-            source_ids = [
-                entity_nodes[key].id for key in dict.fromkeys(suggested.source_entity_keys)
-            ]
-            create_data = IntentCreate(
-                description=suggested.description,
-                source_node_ids=source_ids,
-                creator=f"worker:{worker_id}",
-                signals=PrioritySignals(
-                    goal_relevance=suggested.goal_relevance,
-                    information_gain=suggested.information_gain,
-                    confidence=suggested.confidence,
-                    expected_cost=suggested.expected_cost,
-                ),
-            )
-            dedupe = intent_key(create_data.description, create_data.source_node_ids)
-            existing = await session.scalar(
-                select(Intent).where(Intent.project_id == project_id, Intent.dedupe_key == dedupe)
-            )
-            await create_intent(session, project_id, create_data, create_source_edges=False)
-            if existing:
+            source_keys = list(dict.fromkeys(suggested.source_entity_keys))
+            identity = normalize_intent(suggested.description) + "|" + "|".join(sorted(source_keys))
+            proposal_id = hashlib.sha256(identity.encode()).hexdigest()
+            if proposal_id in pending_ids:
                 duplicate_intents += 1
             else:
-                created_intents += 1
+                pending_proposals.append(
+                    {
+                        "proposal_id": proposal_id,
+                        "description": suggested.description,
+                        "source_entity_keys": source_keys,
+                        "goal_relevance": suggested.goal_relevance,
+                        "information_gain": suggested.information_gain,
+                        "novelty": "medium",
+                        "confidence": suggested.confidence,
+                        "expected_cost": suggested.expected_cost,
+                        "proposed_by": worker_id,
+                        "worker_run_id": run.id,
+                    }
+                )
+                pending_ids.add(proposal_id)
+        project.config = {
+            **(project.config or {}),
+            "orchestrator": {
+                **current_orchestrator_state,
+                "pending_worker_proposals": pending_proposals[-20:],
+            },
+        }
 
         agent_run_metrics = _run_metrics(agent_run, output)
-        agent_run_metrics["duplicate_intent_count"] = duplicate_intents
-        agent_run_metrics["duplicate_intent_rate"] = (
+        agent_run_metrics["duplicate_worker_proposal_count"] = duplicate_intents
+        agent_run_metrics["duplicate_worker_proposal_rate"] = (
             duplicate_intents / len(output.suggested_intents) if output.suggested_intents else 0.0
         )
 
@@ -391,7 +412,7 @@ async def run_once(session: AsyncSession, project_id: str, worker_id: str) -> Ru
             worker_run_id=run.id,
             status="completed",
             created_nodes=created_nodes,
-            created_intents=created_intents,
+            created_intents=0,
         )
     except Exception as exc:
         unsupported_facts = getattr(exc, "unsupported_facts", unsupported_facts)

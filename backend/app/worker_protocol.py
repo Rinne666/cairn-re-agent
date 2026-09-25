@@ -70,8 +70,8 @@ class WorkerArtifact(BaseModel):
 class SuggestedIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    description: StrictStr = Field(min_length=1)
-    source_entity_keys: list[StrictStr]
+    description: StrictStr = Field(min_length=1, max_length=1000)
+    source_entity_keys: list[StrictStr] = Field(max_length=8)
     goal_relevance: Literal["low", "medium", "high"]
     information_gain: Literal["low", "medium", "high"]
     confidence: Literal["low", "medium", "high"]

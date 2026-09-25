@@ -1,9 +1,10 @@
 from fastapi import APIRouter
 
-from app.api.routes import artifacts, graph, intents, projects, realtime, workers
+from app.api.routes import artifacts, graph, intents, orchestrator, projects, realtime, workers
 
 api_router = APIRouter()
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])
+api_router.include_router(orchestrator.router, tags=["orchestrator"])
 api_router.include_router(artifacts.router, tags=["artifacts"])
 api_router.include_router(graph.router, tags=["graph"])
 api_router.include_router(intents.router, tags=["intents"])

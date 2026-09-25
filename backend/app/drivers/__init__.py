@@ -11,4 +11,10 @@ def get_driver(name: str):
     raise ValueError(f"unknown worker driver: {name}")
 
 
-__all__ = ["MockDriver", "PiDriver", "get_driver"]
+def get_orchestrator_driver():
+    if not get_settings().pi_command:
+        raise RuntimeError("Graph Orchestrator requires CAIRN_PI_COMMAND")
+    return PiDriver(get_settings().pi_command)
+
+
+__all__ = ["MockDriver", "PiDriver", "get_driver", "get_orchestrator_driver"]

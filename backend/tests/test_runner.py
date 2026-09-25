@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.models import GraphEdge, GraphNode, Intent, Worker, WorkerRun
+from app.models import GraphEdge, GraphNode, Intent, Project, Worker, WorkerRun
 from app.schemas import NodeCreate
 from app.services.graph import upsert_node
 from app.services.runner import run_once, seed_demo
@@ -23,7 +23,7 @@ async def test_worker_run_extends_evidence_graph_and_queue(session):
     assert result is not None
     assert result.status == "completed"
     assert result.created_nodes == 3
-    assert result.created_intents == 1
+    assert result.created_intents == 0
 
     hypothesis = await session.scalar(
         select(GraphNode).where(GraphNode.project_id == project.id, GraphNode.kind == "Hypothesis")
@@ -39,7 +39,9 @@ async def test_worker_run_extends_evidence_graph_and_queue(session):
             Intent.project_id == project.id, Intent.status == "open"
         )
     )
-    assert open_intents == 1
+    assert open_intents == 0
+    project = await session.get(Project, project.id)
+    assert len(project.config["orchestrator"]["pending_worker_proposals"]) == 1
 
 
 def output_with(*, relations=None, status="completed", include_fact=False):
@@ -281,7 +283,7 @@ async def test_finding_cannot_overwrite_existing_node_with_another_kind(session,
     original = await session.scalar(
         select(GraphNode).where(
             GraphNode.project_id == project_id,
-                GraphNode.entity_key == f"function:{project_id}:0x401200",
+            GraphNode.entity_key == f"function:{project_id}:0x401200",
         )
     )
     assert result.status == "failed"
@@ -361,10 +363,12 @@ async def test_duplicate_suggested_intent_is_deduped_and_counted(session, monkey
             )
         ).all()
     )
-    assert result.created_intents == 1
-    assert len(intents) == 1
-    assert run.output_summary["duplicate_intent_count"] == 1
-    assert run.output_summary["duplicate_intent_rate"] == 0.5
+    assert result.created_intents == 0
+    assert not intents
+    project = await session.get(Project, project.id)
+    assert len(project.config["orchestrator"]["pending_worker_proposals"]) == 1
+    assert run.output_summary["duplicate_worker_proposal_count"] == 1
+    assert run.output_summary["duplicate_worker_proposal_rate"] == 0.5
     worker_edges = list(
         (
             await session.scalars(

@@ -2,10 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db import get_session
 from app.models import Project
 from app.schemas import ProjectCreate, ProjectRead
 from app.services.events import emit_event
+from app.services.orchestrator import orchestrate_project
 from app.services.runner import seed_demo
 
 router = APIRouter()
@@ -25,6 +27,8 @@ async def create_project(
     await session.flush()
     await emit_event(session, project.id, "project.created", {"project_id": project.id})
     await session.commit()
+    if get_settings().pi_command:
+        await orchestrate_project(session, project.id, trigger="project_created")
     return project
 
 
@@ -32,6 +36,8 @@ async def create_project(
 async def create_demo_project(session: AsyncSession = Depends(get_session)) -> Project:
     project = await seed_demo(session)
     await session.commit()
+    if get_settings().pi_command:
+        await orchestrate_project(session, project.id, trigger="project_created")
     return project
 
 

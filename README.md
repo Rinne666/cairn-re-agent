@@ -84,6 +84,19 @@ and have usable quota; auth readiness alone does not prove API availability.
 
 See [the architecture note](docs/architecture.md) for invariants and extension points.
 
+### Graph Orchestrator (first phase)
+
+The optional Pi Graph Orchestrator uses the existing `CAIRN_PI_COMMAND`. When configured,
+it makes one structured Pi call after project creation or a meaningful Worker result; one
+schema retry is allowed. `POST /api/v1/projects/{project_id}/orchestrate` runs it manually.
+Its context is bounded and excludes raw Program Graph dumps and event history.
+
+Worker `suggested_intents` are staged as pending proposals, not immediately added to the
+claimable frontier. The Orchestrator may accept, merge, or reject them; Runtime validates
+source entities, deduplicates, and enforces a maximum of three new intents per tick and
+the configured project budget. Invalid output is recorded as an `orchestrator.failed`
+event with stdout/stderr diagnostics and does not mutate the graph or frontier.
+
 ## Implemented API surface
 
 - Projects: create, demo seed, list, start, pause

@@ -98,6 +98,7 @@ class GraphSnapshot(BaseModel):
 class PrioritySignals(BaseModel):
     goal_relevance: Literal["low", "medium", "high"] = "medium"
     information_gain: Literal["low", "medium", "high"] = "medium"
+    novelty: Literal["low", "medium", "high"] = "high"
     confidence: Literal["low", "medium", "high"] = "medium"
     expected_cost: Literal["low", "medium", "high"] = "medium"
 
@@ -183,3 +184,14 @@ class RunResult(BaseModel):
     status: str
     created_nodes: int
     created_intents: int
+
+
+class OrchestrationRead(BaseModel):
+    status: str
+    created_intents: int
+    closed_intents: int
+    deprioritized_intents: int
+    token_input: int
+    token_output: int
+    retry_count: int
+    error: str | None = None

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.models import Worker
 from app.schemas import RunResult, WorkerCreate, WorkerRead
+from app.services.orchestrator import trigger_after_worker_runs
 from app.services.runner import run_once
 from app.services.scheduler import scheduler_tick
 
@@ -49,6 +50,9 @@ async def execute_worker(
     if result is None:
         raise HTTPException(status_code=404, detail="no claimable intent")
     await session.commit()
+    await trigger_after_worker_runs(
+        session, project_id, [result.worker_run_id], trigger="worker_run"
+    )
     return result
 
 

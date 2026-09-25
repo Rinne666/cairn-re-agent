@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from app.drivers.pi import SYSTEM_PROMPT, PiDriver
+from app.drivers.pi import ORCHESTRATOR_SYSTEM_PROMPT, SYSTEM_PROMPT, PiDriver
+from app.orchestrator_protocol import OrchestratorContext
 from app.worker_protocol import AgentRun, WorkerContext
 
 
@@ -24,6 +25,19 @@ def valid_worker_output():
         "suggested_intents": [],
         "status": "completed",
         "summary": "No new claims are justified.",
+    }
+
+
+def valid_orchestrator_output():
+    return {
+        "state_summary": "One unresolved validation question remains.",
+        "focus": "Determine whether the input length controls the comparison.",
+        "intents_to_create": [],
+        "intents_to_close": [],
+        "intents_to_deprioritize": [],
+        "critical_unknowns": ["Comparison length is not yet known."],
+        "convergence_status": "continue",
+        "convergence_reason": "Evidence is not sufficient for completion.",
     }
 
 
@@ -151,6 +165,51 @@ async def test_well_formed_failed_status_is_valid_and_not_retried(monkeypatch):
     assert calls == 1
     assert run.output.status == "failed"
     assert run.schema_valid is True
+
+
+@pytest.mark.asyncio
+async def test_pi_orchestrator_returns_strict_structured_output(monkeypatch):
+    expected = valid_orchestrator_output()
+
+    async def spawn(*argv, **kwargs):
+        assert "--no-tools" in argv and "--no-session" in argv
+        assert "--system-prompt" in argv
+        assert argv[argv.index("--system-prompt") + 1] == ORCHESTRATOR_SYSTEM_PROMPT
+        return FakeProcess(0, event_stream(json.dumps(expected), 21, 8))
+
+    monkeypatch.setattr("app.drivers.pi.asyncio.create_subprocess_exec", spawn)
+    run = await PiDriver("node C:/pi/cli.js").run_orchestrator(
+        OrchestratorContext(goal="Find the license validation path")
+    )
+
+    assert run.output.model_dump() == expected
+    assert run.schema_valid is True
+    assert (run.token_input, run.token_output) == (21, 8)
+    assert run.retry_count == 0
+
+
+@pytest.mark.asyncio
+async def test_pi_orchestrator_invalid_schema_retries_once(monkeypatch):
+    process_outputs = [
+        FakeProcess(0, event_stream("{}")),
+        FakeProcess(0, event_stream(json.dumps(valid_orchestrator_output()))),
+    ]
+    prompts = []
+
+    async def spawn(*argv, **kwargs):
+        prompts.append(argv[-1])
+        return process_outputs.pop(0)
+
+    monkeypatch.setattr("app.drivers.pi.asyncio.create_subprocess_exec", spawn)
+    run = await PiDriver("node C:/pi/cli.js").run_orchestrator(
+        OrchestratorContext(goal="Find the license validation path")
+    )
+
+    assert run.output is not None
+    assert run.retry_count == 1
+    assert run.schema_invalid_attempts == 1
+    assert len(prompts) == 2
+    assert "schema validation" in prompts[1]
 
 
 @pytest.mark.asyncio

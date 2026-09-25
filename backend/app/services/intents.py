@@ -28,6 +28,7 @@ def score_intent(data: IntentCreate) -> float:
     numerator = (
         SIGNAL_VALUES[signals.goal_relevance]
         * SIGNAL_VALUES[signals.information_gain]
+        * SIGNAL_VALUES[signals.novelty]
         * SIGNAL_VALUES[signals.confidence]
     )
     cost = SIGNAL_VALUES[signals.expected_cost]
